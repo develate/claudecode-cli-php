@@ -11,20 +11,24 @@ use Symfony\Component\Process\Process;
 
 final class ClaudeProcess
 {
-    /** @param list<string> $command */
+    /**
+     * @param  list<string>  $command
+     * @param  array<string, string|false>  $env
+     */
     public function __construct(
         private readonly array $command,
         private readonly ?string $cwd = null,
         private readonly ?float $timeout = null,
-    ) {
-    }
+        private readonly array $env = [],
+        private readonly ?string $input = null,
+    ) {}
 
     /** @return \Generator<int, string, void, ProcessResult> */
     public function lines(?\Closure $isCancelled = null): \Generator
     {
         ClaudeExecutable::assertAvailable($this->command[0]);
-        $process = new Process($this->command, $this->cwd, timeout: $this->timeout);
-        $reader = new StreamJsonReader();
+        $process = new Process($this->command, $this->cwd, $this->env, $this->input, $this->timeout);
+        $reader = new StreamJsonReader;
         $stderr = '';
 
         try {

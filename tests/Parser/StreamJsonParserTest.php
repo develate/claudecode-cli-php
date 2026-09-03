@@ -12,7 +12,10 @@ use Develate\ClaudecodeCli\Event\UnknownEvent;
 use Develate\ClaudecodeCli\Exception\InvalidStreamJson;
 use Develate\ClaudecodeCli\Message\AssistantMessage;
 use Develate\ClaudecodeCli\Message\UnknownMessage;
+use Develate\ClaudecodeCli\Event\StreamEvent;
+use Develate\ClaudecodeCli\Event\ThinkingDelta;
 use Develate\ClaudecodeCli\Parser\StreamJsonParser;
+use Develate\ClaudecodeCli\Value\SessionInit;
 use Develate\ClaudecodeCli\Tool\ToolResult;
 use Develate\ClaudecodeCli\Tool\ToolUse;
 use PHPUnit\Framework\TestCase;
@@ -96,5 +99,76 @@ final class StreamJsonParserTest extends TestCase
     {
         $this->expectException(InvalidStreamJson::class);
         (new StreamJsonParser())->parseLine('{not json');
+    }
+
+    public function testParsesThinkingDeltaSeparatelyFromText(): void
+    {
+        $items = (new StreamJsonParser)->parseLine(json_encode([
+            'type' => 'stream_event',
+            'parent_tool_use_id' => 'toolu_sub',
+            'event' => [
+                'type' => 'content_block_delta',
+                'delta' => ['type' => 'thinking_delta', 'thinking' => 'weighing options'],
+            ],
+        ]));
+
+        self::assertInstanceOf(ThinkingDelta::class, $items[0]);
+        self::assertSame('weighing options', $items[0]->thinking);
+        self::assertSame('toolu_sub', $items[0]->parentToolUseId);
+    }
+
+    public function testKeepsSignatureDeltaAsAStreamEvent(): void
+    {
+        $items = (new StreamJsonParser)->parseLine(json_encode([
+            'type' => 'stream_event',
+            'event' => [
+                'type' => 'content_block_delta',
+                'delta' => ['type' => 'signature_delta', 'signature' => 'abc'],
+            ],
+        ]));
+
+        self::assertInstanceOf(StreamEvent::class, $items[0]);
+        self::assertSame('content_block_delta', $items[0]->type);
+    }
+
+    public function testReadsInitMetadataFromTheSystemMessage(): void
+    {
+        $items = (new StreamJsonParser)->parseLine(json_encode([
+            'type' => 'system',
+            'subtype' => 'init',
+            'session_id' => 'session-init',
+            'cwd' => '/project',
+            'model' => 'claude-sonnet-5',
+            'permissionMode' => 'acceptEdits',
+            'tools' => ['Read', 'Edit'],
+            'mcp_servers' => [['name' => 'develate_plan', 'status' => 'connected']],
+            'agents' => ['general-purpose'],
+            'apiKeySource' => 'none',
+            'claude_code_version' => '2.1.259',
+            'fast_mode_state' => 'off',
+            'fast_mode_disabled_reason' => 'sdk_opt_in_required',
+        ]));
+
+        $init = SessionInit::fromSystemMessage($items[0]);
+
+        self::assertNotNull($init);
+        self::assertSame('session-init', $init->sessionId);
+        self::assertSame('claude-sonnet-5', $init->model);
+        self::assertSame('acceptEdits', $init->permissionMode);
+        self::assertTrue($init->hasTool('Edit'));
+        self::assertFalse($init->hasTool('Bash'));
+        self::assertCount(1, $init->mcpServers);
+        self::assertSame('sdk_opt_in_required', $init->fastModeDisabledReason);
+    }
+
+    public function testNonInitSystemMessagesHaveNoInitMetadata(): void
+    {
+        $items = (new StreamJsonParser)->parseLine(json_encode([
+            'type' => 'system',
+            'subtype' => 'compact_boundary',
+            'session_id' => 'session-init',
+        ]));
+
+        self::assertNull(SessionInit::fromSystemMessage($items[0]));
     }
 }

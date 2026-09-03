@@ -10,6 +10,7 @@ use Develate\ClaudecodeCli\Event\PermissionDeniedEvent;
 use Develate\ClaudecodeCli\Event\RateLimitEvent;
 use Develate\ClaudecodeCli\Event\StreamEvent;
 use Develate\ClaudecodeCli\Event\TextDelta;
+use Develate\ClaudecodeCli\Event\ThinkingDelta;
 use Develate\ClaudecodeCli\Event\ToolProgressEvent;
 use Develate\ClaudecodeCli\Event\UnknownEvent;
 use Develate\ClaudecodeCli\Exception\InvalidStreamJson;
@@ -93,13 +94,19 @@ final readonly class StreamJsonParser
     }
 
     /** @param array<string, mixed> $raw */
-    private function streamEvent(array $raw): StreamEvent|TextDelta
+    private function streamEvent(array $raw): StreamEvent|TextDelta|ThinkingDelta
     {
         $event = is_array($raw['event'] ?? null) ? $raw['event'] : [];
         $delta = is_array($event['delta'] ?? null) ? $event['delta'] : [];
         $parentId = self::nullableString($raw['parent_tool_use_id'] ?? $raw['parentToolUseId'] ?? null);
-        if (($event['type'] ?? null) === 'content_block_delta' && ($delta['type'] ?? null) === 'text_delta') {
-            return new TextDelta(self::string($delta['text'] ?? null), $parentId, $raw);
+        if (($event['type'] ?? null) === 'content_block_delta') {
+            if (($delta['type'] ?? null) === 'text_delta') {
+                return new TextDelta(self::string($delta['text'] ?? null), $parentId, $raw);
+            }
+            // `signature_delta` carries no readable text and stays a StreamEvent.
+            if (($delta['type'] ?? null) === 'thinking_delta') {
+                return new ThinkingDelta(self::string($delta['thinking'] ?? null), $parentId, $raw);
+            }
         }
 
         return new StreamEvent(self::string($event['type'] ?? null), $event, $parentId, $raw);

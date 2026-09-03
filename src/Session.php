@@ -7,37 +7,27 @@ namespace Develate\ClaudecodeCli;
 use Develate\ClaudecodeCli\Transport\RunMode;
 use Develate\ClaudecodeCli\Transport\RunRequest;
 use Develate\ClaudecodeCli\Transport\Transport;
-use Develate\ClaudecodeCli\Value\PermissionMode;
 use Develate\ClaudecodeCli\Value\RunMetadata;
 
 final class Session
 {
     private ?Result $lastResult = null;
 
+    private ?string $sessionId;
+
     /** @var list<callable(StreamItem): void> */
     private array $listeners = [];
 
-    /**
-     * @param list<string> $additionalDirectories
-     * @param list<string>|null $tools
-     * @param list<string> $allowedTools
-     * @param list<string> $disallowedTools
-     */
     public function __construct(
         private readonly Transport $transport,
         private readonly string $claudeVersion,
-        private readonly string $cwd,
-        private readonly ?string $model,
-        private readonly PermissionMode $permissionMode,
-        private readonly array $additionalDirectories = [],
-        private readonly ?array $tools = null,
-        private readonly array $allowedTools = [],
-        private readonly array $disallowedTools = [],
+        private readonly SessionOptions $options,
         private readonly ?float $timeout = null,
-        private ?string $sessionId = null,
+        ?string $sessionId = null,
         private RunMode $nextMode = RunMode::Start,
         private readonly ?string $forkFromSessionId = null,
     ) {
+        $this->sessionId = $sessionId ?? $options->sessionId;
     }
 
     public function id(): ?string
@@ -45,38 +35,22 @@ final class Session
         return $this->sessionId;
     }
 
-    /**
-     * @param array<string, mixed>|null $schema
-     * @param list<string> $images
-     */
-    public function query(
-        string $prompt,
-        ?int $maxTurns = null,
-        ?float $maxBudgetUsd = null,
-        ?array $schema = null,
-        array $images = [],
-        ?float $timeout = null,
-    ): Result {
-        return $this->stream($prompt, $maxTurns, $maxBudgetUsd, $schema, $images, $timeout)->result();
+    public function options(): SessionOptions
+    {
+        return $this->options;
     }
 
-    /**
-     * @param array<string, mixed>|null $schema
-     * @param list<string> $images
-     */
-    public function stream(
-        string $prompt,
-        ?int $maxTurns = null,
-        ?float $maxBudgetUsd = null,
-        ?array $schema = null,
-        array $images = [],
-        ?float $timeout = null,
-    ): Run {
-        if ($maxTurns !== null && $maxTurns < 1) {
-            throw new \InvalidArgumentException('maxTurns must be at least 1.');
-        }
-        if ($maxBudgetUsd !== null && $maxBudgetUsd < 0) {
-            throw new \InvalidArgumentException('maxBudgetUsd must not be negative.');
+    public function query(string $prompt, ?RunOptions $options = null): Result
+    {
+        return $this->stream($prompt, $options)->result();
+    }
+
+    public function stream(string $prompt, ?RunOptions $options = null): Run
+    {
+        $run = $options ?? new RunOptions;
+
+        if ($run->timeout === null && $this->timeout !== null) {
+            $run = $run->withTimeout($this->timeout);
         }
 
         return new Run(
@@ -85,20 +59,10 @@ final class Session
                 mode: $this->nextMode,
                 sessionId: $this->nextMode === RunMode::Fork ? $this->forkFromSessionId : $this->sessionId,
                 prompt: $prompt,
-                cwd: $this->cwd,
-                model: $this->model,
-                permissionMode: $this->permissionMode,
-                additionalDirectories: $this->additionalDirectories,
-                tools: $this->tools,
-                allowedTools: $this->allowedTools,
-                disallowedTools: $this->disallowedTools,
-                maxTurns: $maxTurns,
-                maxBudgetUsd: $maxBudgetUsd,
-                schema: $schema,
-                images: $images,
-                timeout: $timeout ?? $this->timeout,
+                session: $this->options,
+                run: $run,
             ),
-            metadata: new RunMetadata($this->claudeVersion, $this->model, $this->cwd),
+            metadata: new RunMetadata($this->claudeVersion, $this->options->model, $this->options->cwd),
             listeners: $this->listeners,
             onComplete: function (Result $result): void {
                 $this->lastResult = $result;
@@ -124,17 +88,29 @@ final class Session
         return new self(
             transport: $this->transport,
             claudeVersion: $this->claudeVersion,
-            cwd: $this->cwd,
-            model: $this->model,
-            permissionMode: $this->permissionMode,
-            additionalDirectories: $this->additionalDirectories,
-            tools: $this->tools,
-            allowedTools: $this->allowedTools,
-            disallowedTools: $this->disallowedTools,
+            options: $this->options->withSessionId(null),
             timeout: $this->timeout,
             sessionId: null,
             nextMode: RunMode::Fork,
             forkFromSessionId: $this->sessionId,
+        );
+    }
+
+    /**
+     * A copy of this session that runs with different options.
+     *
+     * The conversation is kept: only what the next run is told about it changes.
+     */
+    public function with(SessionOptions $options): self
+    {
+        return new self(
+            transport: $this->transport,
+            claudeVersion: $this->claudeVersion,
+            options: $options,
+            timeout: $this->timeout,
+            sessionId: $this->sessionId,
+            nextMode: $this->nextMode,
+            forkFromSessionId: $this->forkFromSessionId,
         );
     }
 

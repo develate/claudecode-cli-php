@@ -6,6 +6,7 @@ namespace Develate\ClaudecodeCli;
 
 use Develate\ClaudecodeCli\Content\ThinkingBlock;
 use Develate\ClaudecodeCli\Event\Event;
+use Develate\ClaudecodeCli\Event\ThinkingDelta;
 use Develate\ClaudecodeCli\Message\AssistantMessage;
 use Develate\ClaudecodeCli\Message\Message;
 use Develate\ClaudecodeCli\Tool\Command;
@@ -18,6 +19,7 @@ use Develate\ClaudecodeCli\Value\PermissionDenial;
 use Develate\ClaudecodeCli\Value\RateLimitInfo;
 use Develate\ClaudecodeCli\Value\ResultStatus;
 use Develate\ClaudecodeCli\Value\RunMetadata;
+use Develate\ClaudecodeCli\Value\SessionInit;
 use Develate\ClaudecodeCli\Value\Usage;
 
 final readonly class Result
@@ -46,6 +48,7 @@ final readonly class Result
         public array $permissionDenials,
         public mixed $structuredOutput,
         public ?RateLimitInfo $rateLimit,
+        public ?SessionInit $init,
         public RunMetadata $metadata,
         public int $exitCode,
         private array $toolUses,
@@ -156,6 +159,24 @@ final readonly class Result
     public function rateLimit(): ?RateLimitInfo
     {
         return $this->rateLimit;
+    }
+
+    /**
+     * What the run resolved at startup: the model behind an alias, the tools
+     * that survived the flags, the MCP servers that actually connected.
+     */
+    public function init(): ?SessionInit
+    {
+        return $this->init;
+    }
+
+    /** @return list<ThinkingDelta> */
+    public function thinkingDeltas(): array
+    {
+        return array_values(array_filter(
+            $this->events,
+            static fn (Event $event): bool => $event instanceof ThinkingDelta,
+        ));
     }
 
     /** @return array<string, mixed> */

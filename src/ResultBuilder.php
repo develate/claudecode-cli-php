@@ -17,6 +17,7 @@ use Develate\ClaudecodeCli\Value\ModelUsage;
 use Develate\ClaudecodeCli\Value\PermissionDenial;
 use Develate\ClaudecodeCli\Value\ResultStatus;
 use Develate\ClaudecodeCli\Value\RunMetadata;
+use Develate\ClaudecodeCli\Value\SessionInit;
 use Develate\ClaudecodeCli\Value\Usage;
 
 final class ResultBuilder
@@ -24,6 +25,8 @@ final class ResultBuilder
     private string $sessionId;
     private ?ResultMessage $resultMessage = null;
     private ?Usage $assistantUsage = null;
+
+    private ?SessionInit $init = null;
 
     /** @var list<Message> */
     private array $messages = [];
@@ -53,8 +56,11 @@ final class ResultBuilder
         if ($item instanceof Event) {
             $this->events[] = $item;
         }
-        if ($item instanceof SystemMessage && $item->sessionId !== null) {
-            $this->sessionId = $item->sessionId;
+        if ($item instanceof SystemMessage) {
+            if ($item->sessionId !== null) {
+                $this->sessionId = $item->sessionId;
+            }
+            $this->init ??= SessionInit::fromSystemMessage($item);
         }
         if ($item instanceof AssistantMessage) {
             if ($item->sessionId !== null) {
@@ -138,6 +144,7 @@ final class ResultBuilder
             permissionDenials: $denials,
             structuredOutput: $terminal?->structuredOutput,
             rateLimit: $rateLimit,
+            init: $this->init,
             metadata: new RunMetadata(
                 $metadata->claudeVersion,
                 $metadata->requestedModel,

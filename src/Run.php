@@ -107,7 +107,7 @@ final class Run implements \IteratorAggregate
     {
         $builder = new ResultBuilder($this->request->sessionId ?? '');
         try {
-            $stream = $this->transport->stream($this->withCancellation($this->request));
+            $stream = $this->transport->stream($this->request->withCancellation(fn (): bool => $this->cancelled));
             foreach ($stream as $item) {
                 $builder->add($item);
                 $this->items[] = $item;
@@ -129,27 +129,5 @@ final class Run implements \IteratorAggregate
             $this->failure = $exception;
             throw $exception;
         }
-    }
-
-    private function withCancellation(RunRequest $request): RunRequest
-    {
-        return new RunRequest(
-            $request->mode,
-            $request->sessionId,
-            $request->prompt,
-            $request->cwd,
-            $request->model,
-            $request->permissionMode,
-            $request->additionalDirectories,
-            $request->tools,
-            $request->allowedTools,
-            $request->disallowedTools,
-            $request->maxTurns,
-            $request->maxBudgetUsd,
-            $request->schema,
-            $request->images,
-            $request->timeout,
-            fn (): bool => $this->cancelled,
-        );
     }
 }
