@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `LimitResetClient`, the headless equivalent of Claude Code's interactive
+  `/limit-reset` command: `status()` reads the `juniper_tide` availability
+  block (`GET /api/oauth/usage?at_wall=1&skip_spend=1`) and `reset()` claims
+  the weekly session-limit reset
+  (`POST /api/organizations/{uuid}/reset_rate_limits`). No new dependencies:
+  the default sender is proxy-aware plain PHP streams, overridable with a
+  `$http` callable.
+- `LimitResetStatus` (with `redeemable()`), `LimitResetResult` (with
+  `didReset()` and `spent()`), the `LimitResetOutcome`,
+  `LimitResetIneligibility` and `LimitResetArm` enums, and the
+  `LimitResetFailed` exception (with `isAuthenticationError()`).
+
 ## v1.1.0
 
 The final v1 contract. `SessionOptions` and `RunOptions` replace the long

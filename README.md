@@ -94,6 +94,29 @@ $status->raw();        // everything the CLI reported
 
 `authStatus()` reads the JSON body even when the command exits non-zero: "not signed in" is an answer, not a failure.
 
+## Session-limit reset (`/limit-reset`)
+
+Claude Code's `/limit-reset` resets the session (5-hour) limit once per week; the reset usage still counts toward the weekly limit. The command itself is interactive-only, but both of its behaviors are plain OAuth API calls under the account's own token, so a host can offer the same feature without a TTY:
+
+```php
+use Develate\ClaudecodeCli\LimitResetClient;
+
+$resets = new LimitResetClient($oauthAccessToken);
+
+$status = $resets->status();   // ?LimitResetStatus; null means "unknown", not "ineligible"
+
+if ($status?->redeemable()) {
+    $result = $resets->reset($organizationUuid);  // from GET /api/oauth/profile → organization.uuid
+
+    $result->didReset();  // true on 'reset'
+    $result->spent();     // true on 'already_used'; see $result->nextAvailableAt
+}
+```
+
+`status()` reads the `juniper_tide` block of `GET /api/oauth/usage?at_wall=1&skip_spend=1` — the plain usage endpoint answers `"juniper_tide": null`, so only the `at_wall` variant is a real signal. `reset()` claims the reset via `POST /api/organizations/{uuid}/reset_rate_limits` with `{"program": "juniper_tide"}`. Outcomes are `reset`, `already_used`, `not_limited`, `ineligible`, and `unavailable`; unknown values fall back to `unavailable`, as Claude Code itself does.
+
+A 401/403 throws `LimitResetFailed` with `isAuthenticationError() === true`: the token is stale or misses the profile scope, and retrying with the same token cannot succeed. The default sender is plain PHP streams (proxy-aware via the standard `*_PROXY`/`NO_PROXY` environment); pass a `$http` callable to override it, e.g. in tests.
+
 ## Streaming
 
 Streaming is the primitive; `query()` creates a `Run` and drains it.
@@ -270,7 +293,7 @@ All extend `ClaudeException`.
 
 ## V1 boundary
 
-V1 intentionally does not include a persistent bidirectional process, interrupts with protocol acknowledgements, runtime model or permission changes, in-process permission callbacks (use `permissionPromptTool` and answer over MCP), MCP runtime control, hooks, plugin management, quota APIs, or a pricing database.
+V1 intentionally does not include a persistent bidirectional process, interrupts with protocol acknowledgements, runtime model or permission changes, in-process permission callbacks (use `permissionPromptTool` and answer over MCP), MCP runtime control, hooks, plugin management, or a pricing database. The one quota API is the session-limit reset (`LimitResetClient`): it mirrors `/limit-reset` 1:1 and stays out of every other quota surface.
 
 ## Tests
 
