@@ -28,6 +28,40 @@ final class ClaudeProcessTest extends TestCase
         self::assertSame('warning', $lines->getReturn()->stderr);
     }
 
+    public function testKeepsStdinOpenUntilToldToClose(): void
+    {
+        $polls = 0;
+        $process = new ClaudeProcess(
+            [PHP_BINARY, '-r', 'echo json_encode(["line" => trim(fgets(STDIN))]), "\n"; while (fgets(STDIN) !== false) {} echo "{\"type\":\"eof\"}\n";'],
+            input: "hello\n",
+        );
+
+        $lines = iterator_to_array($process->lines(closeInput: static function () use (&$polls): bool {
+            return ++$polls > 20;
+        }), false);
+
+        self::assertSame(['{"line":"hello"}', '{"type":"eof"}'], $lines);
+        self::assertGreaterThan(20, $polls);
+    }
+
+    public function testCanBeStoppedWithoutFailing(): void
+    {
+        $process = new ClaudeProcess([PHP_BINARY, '-r', 'echo "{\"type\":\"result\"}\n"; flush(); sleep(30);']);
+
+        $started = microtime(true);
+        $seen = [];
+        $lines = $process->lines(stop: static function () use (&$seen): bool {
+            return $seen !== [];
+        });
+        foreach ($lines as $line) {
+            $seen[] = $line;
+        }
+
+        self::assertSame(['{"type":"result"}'], $seen);
+        self::assertNotSame(0, $lines->getReturn()->exitCode);
+        self::assertLessThan(10.0, microtime(true) - $started);
+    }
+
     public function testCanBeCancelled(): void
     {
         $process = new ClaudeProcess([PHP_BINARY, '-r', 'usleep(100000);']);

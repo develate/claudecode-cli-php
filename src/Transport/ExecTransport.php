@@ -8,7 +8,6 @@ use Develate\ClaudecodeCli\Parser\StreamJsonParser;
 use Develate\ClaudecodeCli\Process\ProcessFactory;
 use Develate\ClaudecodeCli\Process\ProcessResult;
 use Develate\ClaudecodeCli\SessionOptions;
-use Develate\ClaudecodeCli\Value\PermissionMode;
 use Develate\ClaudecodeCli\Value\SettingSource;
 
 /**
@@ -18,6 +17,11 @@ use Develate\ClaudecodeCli\Value\SettingSource;
  * Claude Code's flags are variadic, and a positional prompt sitting behind one
  * of them is swallowed as another value. Stdin also removes the operating
  * system's argument-length ceiling, which a long transcript reaches easily.
+ *
+ * It is sent as a stream-json user message and stdin stays open until the
+ * model has nothing left running in the background (see BackgroundTaskWait)
+ * and has received every steering message (see SteeringChannel). A result
+ * that waits past the run's background-wait limit ends the process.
  */
 final readonly class ExecTransport implements Transport
 {
@@ -41,11 +45,29 @@ final readonly class ExecTransport implements Transport
             $this->input($request),
         );
 
-        $lines = $process->lines($request->isCancelled);
-        foreach ($lines as $line) {
-            foreach ($this->parser->parseLine($line) as $item) {
-                yield $item;
+        $wait = new BackgroundTaskWait($request->run->maxBackgroundWait);
+        $steering = $request->steering ?? new SteeringChannel;
+        $closeInput = static function () use ($wait, $steering): bool {
+            if (!$wait->isDone() || !$steering->isSettled()) {
+                return false;
             }
+            $steering->close();
+
+            return true;
+        };
+
+        $steering->open();
+        try {
+            $lines = $process->lines($request->isCancelled, $closeInput, $steering->input(...), $wait->isExpired(...));
+            foreach ($lines as $line) {
+                foreach ($this->parser->parseLine($line) as $item) {
+                    $wait->observe($item);
+                    $steering->observe($item);
+                    yield $item;
+                }
+            }
+        } finally {
+            $steering->close();
         }
 
         /** @var ProcessResult $result */
@@ -59,7 +81,7 @@ final readonly class ExecTransport implements Transport
     {
         $session = $request->session;
 
-        $command = [$this->binary, '--print', '--output-format', 'stream-json', '--verbose'];
+        $command = [$this->binary, '--print', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--replay-user-messages'];
 
         if ($session->includePartialMessages) {
             $command[] = '--include-partial-messages';
@@ -90,17 +112,11 @@ final readonly class ExecTransport implements Transport
     }
 
     /**
-     * The prompt, as it is written to the child process' stdin.
+     * The prompt, as the stream-json user message written to stdin.
      */
     public function input(RunRequest $request): string
     {
-        if ($request->run->images === []) {
-            return $request->prompt;
-        }
-
-        return $request->prompt
-            ."\n\nUse the following image files as visual inputs:\n- "
-            .implode("\n- ", $request->run->images);
+        return UserInput::line($request->prompt, $request->run->images);
     }
 
     /** @return list<string> */
@@ -123,12 +139,8 @@ final readonly class ExecTransport implements Transport
     /** @return list<string> */
     private function permissionFlags(SessionOptions $session): array
     {
-        $flags = [];
+        $flags = ['--permission-mode', $session->permissionMode->value];
 
-        if ($session->permissionMode !== PermissionMode::Default) {
-            $flags[] = '--permission-mode';
-            $flags[] = $session->permissionMode->value;
-        }
         if ($session->permissionPromptTool !== null && $session->permissionPromptTool !== '') {
             $flags[] = '--permission-prompt-tool';
             $flags[] = $session->permissionPromptTool;

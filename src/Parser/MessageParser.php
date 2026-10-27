@@ -90,6 +90,8 @@ final readonly class MessageParser
             self::nullableString($raw['parent_tool_use_id'] ?? $raw['parentToolUseId'] ?? null),
             self::nullableString($raw['session_id'] ?? null),
             $raw,
+            self::nullableString($raw['uuid'] ?? null),
+            ($raw['isReplay'] ?? false) === true,
         );
     }
 

@@ -5,11 +5,13 @@ declare(strict_types=1);
 namespace Develate\ClaudecodeCli;
 
 use Develate\ClaudecodeCli\Exception\LimitResetFailed;
+use Develate\ClaudecodeCli\Value\BankedResetResult;
+use Develate\ClaudecodeCli\Value\BankedResetStatus;
 use Develate\ClaudecodeCli\Value\LimitResetResult;
 use Develate\ClaudecodeCli\Value\LimitResetStatus;
 
 /**
- * Availability and redemption for Claude Code's `/limit-reset`.
+ * Availability and redemption for Claude Code's session-limit and banked resets.
  *
  * The interactive command itself cannot run headless — Claude Code marks it
  * `supportsNonInteractive: false` — but both of its behaviors are plain
@@ -22,6 +24,8 @@ use Develate\ClaudecodeCli\Value\LimitResetStatus;
  *   at most once per week.
  * - `reset()` claims it via
  *   `POST /api/organizations/{uuid}/reset_rate_limits`.
+ * - `bankedStatus()` reads the independent `cedar_ember` program, and
+ *   `consumeBankedReset()` spends one reset from its server-selected grant.
  *
  * The organization UUID comes from `GET /api/oauth/profile`
  * (`organization.uuid`). A 401/403 throws a `LimitResetFailed` whose
@@ -32,25 +36,30 @@ final class LimitResetClient
 {
     public const PROGRAM = 'juniper_tide';
 
+    public const BANKED_PROGRAM = 'cedar_ember';
+
+    public const BANKED_USAGE_PATH = '/api/oauth/usage?cedar_ember=1&skip_spend=1';
+
     private const OAUTH_BETA = 'oauth-2025-04-20';
 
     private const USER_AGENT = 'develate-claudecode-cli-php';
 
     private readonly string $baseUrl;
 
-    /** @var callable(string, string, array<string, string>, string|null): array{status: int, body: string}|null */
+    /** @var callable(string, string, array<string, string>, string|null): (array{status: int, body: string}|null) */
     private $http;
 
     /**
-     * @param  callable(string, string, array<string, string>, string|null): array{status: int, body: string}|null  $http
-     *         `fn(method, url, headers, body)`; defaults to a plain PHP
-     *         streams sender so the package needs no HTTP dependency.
+     * @param  (callable(string, string, array<string, string>, string|null): (array{status: int, body: string}|null))|null  $http
+     *                                                                                                                              `fn(method, url, headers, body)`; defaults to a plain PHP
+     *                                                                                                                              streams sender so the package needs no HTTP dependency.
      */
     public function __construct(
         private readonly string $token,
         string $baseUrl = 'https://api.anthropic.com',
         private readonly ?float $timeout = 10.0,
         ?callable $http = null,
+        private readonly ?string $cliVersion = null,
     ) {
         if (trim($this->token) === '') {
             throw new \InvalidArgumentException('token must not be empty.');
@@ -88,6 +97,47 @@ final class LimitResetClient
         }
 
         return LimitResetStatus::fromArray($block);
+    }
+
+    public function bankedStatus(): ?BankedResetStatus
+    {
+        $response = ($this->http)('GET', $this->baseUrl.self::BANKED_USAGE_PATH, $this->bankedHeaders(), null);
+
+        return BankedResetStatus::fromUsage($this->payload('GET', self::BANKED_USAGE_PATH, $response));
+    }
+
+    /** Spend one reset from a grant, reusing requestId on every retry. */
+    public function consumeBankedReset(string $organizationUuid, string $grantId, string $requestId): BankedResetResult
+    {
+        if (trim($organizationUuid) === '') {
+            throw new \InvalidArgumentException('organizationUuid must not be empty.');
+        }
+
+        if (preg_match('/\A[a-z0-9_-]{1,40}\z/', $grantId) !== 1
+            || preg_match('/\A[A-Za-z0-9_-]{1,64}\z/', $requestId) !== 1) {
+            throw new \InvalidArgumentException('Invalid banked reset grant or request ID.');
+        }
+
+        $path = '/api/organizations/'.rawurlencode(trim($organizationUuid)).'/reset_rate_limits';
+        $response = ($this->http)('POST', $this->baseUrl.$path, $this->bankedHeaders(), json_encode([
+            'program' => self::BANKED_PROGRAM,
+            'grant_id' => $grantId,
+            'request_id' => $requestId,
+        ], JSON_THROW_ON_ERROR));
+
+        return BankedResetResult::fromArray($this->payload('POST', $path, $response));
+    }
+
+    /** Anthropic uses the CLI surface and version to determine grant eligibility. */
+    public static function bankedUserAgent(?string $version = null): string
+    {
+        return 'claude-cli/'.($version ?? '2.1.288').' (external, cli)';
+    }
+
+    /** @return array<string, string> */
+    private function bankedHeaders(): array
+    {
+        return array_replace($this->headers(), ['User-Agent' => self::bankedUserAgent($this->cliVersion)]);
     }
 
     /**
@@ -171,7 +221,7 @@ final class LimitResetClient
         return $decoded;
     }
 
-    /** @return callable(string, string, array<string, string>, string|null): array{status: int, body: string}|null */
+    /** @return callable(string, string, array<string, string>, string|null): (array{status: int, body: string}|null) */
     private function defaultSender(): callable
     {
         $timeout = $this->timeout ?? 10.0;

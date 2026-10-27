@@ -117,6 +117,39 @@ if ($status?->redeemable()) {
 
 A 401/403 throws `LimitResetFailed` with `isAuthenticationError() === true`: the token is stale or misses the profile scope, and retrying with the same token cannot succeed. The default sender is plain PHP streams (proxy-aware via the standard `*_PROXY`/`NO_PROXY` environment); pass a `$http` callable to override it, e.g. in tests.
 
+## Banked resets
+
+Banked resets use Claude Code's separate `cedar_ember` program. A grant may
+contain several resets; only the server-selected grant can currently be used.
+
+```php
+$resets = new LimitResetClient($oauthAccessToken, cliVersion: $claude->version());
+$status = $resets->bankedStatus(); // null means availability is unknown
+$status?->availableCount();
+$status?->summary();             // available_count and grant expiry details
+
+foreach ($status?->grants ?? [] as $grant) {
+    $creditId = $grant->creditId(); // changes after each reset in this grant
+    if ($status->redeemableGrant($creditId) !== null) {
+        $result = $resets->consumeBankedReset($organizationUuid, $grant->id, $requestId);
+        $result->didReset();
+        $result->resetsLeft;
+        $result->cleared;
+        break;
+    }
+}
+```
+
+Read availability before offering a reset, then confirm with the user before
+consuming it. Persist the request ID and reuse it after transport failures or
+an unconfirmed outcome. A confirmed rejection (`not_limited`, `cooldown`, or
+`ineligible`) permits a later claim with a new request ID.
+`bankedStatus()` reads `/api/oauth/usage?cedar_ember=1&skip_spend=1` and never
+spends a reset. `consumeBankedReset()` posts `program`, `grant_id`, and
+`request_id` to the organization's `reset_rate_limits` endpoint. Grant
+restrictions, pauses, and cooldowns remain separate from the weekly
+session-limit reset.
+
 ## Streaming
 
 Streaming is the primitive; `query()` creates a `Run` and drains it.
@@ -149,7 +182,46 @@ A run yields `Message`, `Event`, `ToolUse`, and `ToolResult` objects. Messages a
 
 Calling `$run->cancel()` asks the running child process to stop. A cancelled run throws `ProcessCancelled`.
 
+A result that leaves background commands running does not end the run: Claude Code reports each finished command to the model, which answers again in the same run. `RunOptions::$maxBackgroundWait` limits how many seconds a result waits for them. Past it the process is stopped, which also stops the commands, and the run returns the results it already has.
+
 The prompt is written to the child process' stdin rather than passed as a trailing argument: several of Claude Code's flags are variadic and would swallow a positional prompt, and stdin also removes the operating system's argument-length ceiling.
+
+## Steering
+
+While a run is streaming, `$run->steer('Focus on the failing tests')` adds a
+user message to it and returns the message uuid. Pass image paths with
+`images: [...]`, and your own uuid with `uuid:` to correlate the message.
+Claude Code hands it to the model at the next tool call; when no tool call is
+left, it answers the message as a follow-up in the same run, which then ends
+with that follow-up's result. A run that has not started or has finished
+rejects steering with `LogicException`; `$run->isSteerable()` tells which.
+
+Once the model has the message, the run yields it back as a `UserMessage`
+with `isReplay === true` and the same `uuid`. Treat that, not the `steer()`
+call, as delivery: a run cancelled or killed before then never showed the
+message to the model. Stdin stays open until every steered message has been
+replayed and answered.
+
+For input arriving from a UI or another process, register
+`$run->onTick($callback)` before iterating. It runs between reads while the
+process is up, at most every 250 ms and also during silent reasoning; read your pending input
+there and call `steer()` for each message. An exception thrown by the callback
+ends the run, so catch delivery failures inside it. `onTick(null)` removes it.
+
+```php
+$run = $session->stream('Refactor the billing module.');
+$run->onTick(function () use ($run, $inbox): void {
+    foreach ($inbox->takePending() as $message) {
+        $inbox->markSent($message, $run->steer($message->text));
+    }
+});
+
+foreach ($run as $item) {
+    if ($item instanceof UserMessage && $item->isReplay) {
+        $inbox->markDelivered($item->uuid);
+    }
+}
+```
 
 ## Messages and content blocks
 
@@ -278,6 +350,8 @@ $projectClaude = $claude->in('/var/www/app');
 $unsafeClaude = $claude->dangerouslyBypassPermissions();
 ```
 
+Every start, resume and fork sends `--permission-mode` explicitly. The default `SessionOptions::$permissionMode` is `PermissionMode::Default`, which sends `--permission-mode default`; it does not defer to defaults that vary by CLI version, provider or telemetry settings.
+
 Bypass mode is deliberately named as dangerous, and it never overrides a permission mode the caller set explicitly. Tool availability (`tools`), pre-approval (`allowedTools`), and denial (`disallowedTools`) remain separate.
 
 ## Exceptions
@@ -293,7 +367,7 @@ All extend `ClaudeException`.
 
 ## V1 boundary
 
-V1 intentionally does not include a persistent bidirectional process, interrupts with protocol acknowledgements, runtime model or permission changes, in-process permission callbacks (use `permissionPromptTool` and answer over MCP), MCP runtime control, hooks, plugin management, or a pricing database. The one quota API is the session-limit reset (`LimitResetClient`): it mirrors `/limit-reset` 1:1 and stays out of every other quota surface.
+V1 intentionally does not include a persistent bidirectional process, interrupts with protocol acknowledgements, runtime model or permission changes, in-process permission callbacks (use `permissionPromptTool` and answer over MCP), MCP runtime control, hooks, plugin management, or a pricing database. `LimitResetClient` exposes session-limit resets and banked resets through the account's OAuth API.
 
 ## Tests
 

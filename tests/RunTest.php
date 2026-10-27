@@ -9,12 +9,23 @@ use Develate\ClaudecodeCli\Exception\ProcessCancelled;
 use Develate\ClaudecodeCli\Exception\ProcessFailed;
 use Develate\ClaudecodeCli\Session;
 use Develate\ClaudecodeCli\SessionOptions;
+use Develate\ClaudecodeCli\Tests\Support\FakeTransport;
 use Develate\ClaudecodeCli\Tests\Support\ScriptedTransport;
+use Develate\ClaudecodeCli\Transport\Transport;
 use Develate\ClaudecodeCli\Value\ResultStatus;
 use PHPUnit\Framework\TestCase;
 
 final class RunTest extends TestCase
 {
+    public function testSteeringRequiresARunningProcess(): void
+    {
+        $run = $this->session(new FakeTransport())->stream('Go.');
+
+        self::assertFalse($run->isSteerable());
+        $this->expectException(\LogicException::class);
+        $run->steer('Focus on the tests');
+    }
+
     public function testCarriesInitMetadataThinkingAndSubagentOutputThrough(): void
     {
         $result = $this->session(new ScriptedTransport([
@@ -135,7 +146,7 @@ final class RunTest extends TestCase
         self::assertFalse($run->isComplete());
     }
 
-    private function session(ScriptedTransport $transport): Session
+    private function session(Transport $transport): Session
     {
         return new Session($transport, '2.1.259', new SessionOptions('/project'));
     }

@@ -46,6 +46,31 @@ final class ResultBuilderTest extends TestCase
         self::assertInstanceOf(ResultMessage::class, $result->messages[array_key_last($result->messages)]);
     }
 
+    public function testAddsUpEveryResultOfARunThatWaitedForBackgroundTasks(): void
+    {
+        $parser = new StreamJsonParser();
+        $builder = new ResultBuilder();
+        foreach ([
+            '{"type":"result","subtype":"success","is_error":false,"session_id":"s1","result":"STARTED","num_turns":2,"total_cost_usd":0.01,"usage":{"input_tokens":18,"output_tokens":226,"cache_read_input_tokens":30603,"cache_creation_input_tokens":4914},"permission_denials":[{"tool_name":"Bash","tool_use_id":"a"}]}',
+            '{"type":"result","subtype":"success","is_error":false,"session_id":"s1","result":"FINISHED","num_turns":1,"total_cost_usd":0.02,"usage":{"input_tokens":10,"output_tokens":51,"cache_read_input_tokens":18244,"cache_creation_input_tokens":366},"permission_denials":[]}',
+        ] as $line) {
+            foreach ($parser->parseLine($line) as $item) {
+                $builder->add($item);
+            }
+        }
+
+        $result = $builder->build(new RunMetadata('2.1.0', null, '/project'), 0);
+
+        self::assertSame('FINISHED', $result->text);
+        self::assertSame(28, $result->usage->inputTokens);
+        self::assertSame(277, $result->usage->outputTokens);
+        self::assertSame(48847, $result->usage->cacheReadInputTokens);
+        self::assertSame(5280, $result->usage->cacheCreationInputTokens);
+        self::assertSame(3, $result->numTurns);
+        self::assertSame(0.02, $result->estimatedCostUsd);
+        self::assertCount(1, $result->permissionDenials);
+    }
+
     public function testFallsBackToLastMainAssistantText(): void
     {
         $parser = new StreamJsonParser();

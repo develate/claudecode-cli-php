@@ -5,10 +5,12 @@ declare(strict_types=1);
 namespace Develate\ClaudecodeCli\Tests;
 
 use Develate\ClaudecodeCli\Claude;
+use Develate\ClaudecodeCli\RunOptions;
 use Develate\ClaudecodeCli\SessionOptions;
 use Develate\ClaudecodeCli\Tests\Support\FakeTransport;
 use Develate\ClaudecodeCli\Transport\RunMode;
 use Develate\ClaudecodeCli\Value\PermissionMode;
+use Develate\ClaudecodeCli\Value\ResultStatus;
 use PHPUnit\Framework\TestCase;
 
 final class ClaudeTest extends TestCase
@@ -110,6 +112,27 @@ final class ClaudeTest extends TestCase
         self::assertFalse($status->loggedIn);
         self::assertFalse($status->isOauth());
         self::assertSame('none', $status->authMethod);
+    }
+
+    public function testARunEndedAtTheBackgroundWaitLimitKeepsItsResult(): void
+    {
+        $claude = new Claude(
+            binary: self::stub(<<<'PHP'
+                fgets(STDIN);
+                echo json_encode(['type' => 'system', 'subtype' => 'background_tasks_changed', 'tasks' => [['task_id' => 't1']]]), "\n";
+                echo json_encode(['type' => 'result', 'subtype' => 'success', 'is_error' => false, 'session_id' => 's1', 'result' => 'STARTED']), "\n";
+                flush();
+                while (fgets(STDIN) !== false) {}
+                sleep(30);
+                PHP),
+            version: '2.1.296',
+        );
+
+        $result = $claude->session(new SessionOptions(sys_get_temp_dir()))
+            ->query('Go.', new RunOptions(timeout: 20.0, maxBackgroundWait: 0.1));
+
+        self::assertSame(ResultStatus::Success, $result->status);
+        self::assertSame('STARTED', $result->text);
     }
 
     /**

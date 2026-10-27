@@ -26,6 +26,15 @@ final class ResultBuilder
     private ?ResultMessage $resultMessage = null;
     private ?Usage $assistantUsage = null;
 
+    /**
+     * A run answers once more for every background task that finishes after
+     * a result. Each result reports only its own usage, turns and denials;
+     * cost and per-model usage are already totals for the whole process.
+     *
+     * @var list<ResultMessage>
+     */
+    private array $resultMessages = [];
+
     private ?SessionInit $init = null;
 
     /** @var list<Message> */
@@ -75,6 +84,7 @@ final class ResultBuilder
         }
         if ($item instanceof ResultMessage) {
             $this->resultMessage = $item;
+            $this->resultMessages[] = $item;
             if ($item->sessionId !== '') {
                 $this->sessionId = $item->sessionId;
             }
@@ -95,7 +105,7 @@ final class ResultBuilder
     public function build(RunMetadata $metadata, int $exitCode): Result
     {
         $terminal = $this->resultMessage;
-        $usage = $terminal?->usage ?? $this->assistantUsage ?? new Usage();
+        $usage = $terminal === null ? $this->assistantUsage ?? new Usage() : $this->resultUsage();
         $modelUsage = [];
         foreach ($terminal?->modelUsage ?? [] as $model => $entry) {
             if (is_string($model) && is_array($entry)) {
@@ -103,10 +113,12 @@ final class ResultBuilder
             }
         }
 
-        $denials = array_map(
-            static fn (array $denial): PermissionDenial => PermissionDenial::fromArray($denial),
-            $terminal?->permissionDenials ?? [],
-        );
+        $denials = [];
+        foreach ($this->resultMessages as $message) {
+            foreach ($message->permissionDenials as $denial) {
+                $denials[] = PermissionDenial::fromArray($denial);
+            }
+        }
         foreach ($this->events as $event) {
             if ($event instanceof PermissionDeniedEvent) {
                 $denials[] = $event->denial;
@@ -135,7 +147,7 @@ final class ResultBuilder
             usage: $usage,
             modelUsage: $modelUsage,
             estimatedCostUsd: $terminal?->estimatedCostUsd,
-            numTurns: $terminal?->numTurns ?? 0,
+            numTurns: array_sum(array_map(static fn (ResultMessage $message): int => $message->numTurns, $this->resultMessages)),
             stopReason: $terminal?->stopReason ?? $this->lastStopReason(),
             terminalReason: $terminalReason,
             status: ResultStatus::fromResult($subtype, $isError, $terminalReason),
@@ -156,6 +168,19 @@ final class ResultBuilder
             toolResults: $this->toolResults,
             raw: $terminal?->raw() ?? [],
         );
+    }
+
+    private function resultUsage(): Usage
+    {
+        $input = $output = $cacheRead = $cacheCreation = 0;
+        foreach ($this->resultMessages as $message) {
+            $input += $message->usage->inputTokens;
+            $output += $message->usage->outputTokens;
+            $cacheRead += $message->usage->cacheReadInputTokens;
+            $cacheCreation += $message->usage->cacheCreationInputTokens;
+        }
+
+        return new Usage($input, $output, $cacheRead, $cacheCreation);
     }
 
     private function finalText(): string

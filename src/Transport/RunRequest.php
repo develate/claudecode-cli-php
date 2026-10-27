@@ -16,6 +16,7 @@ final readonly class RunRequest
         public SessionOptions $session,
         public RunOptions $run = new RunOptions,
         public ?\Closure $isCancelled = null,
+        public ?SteeringChannel $steering = null,
     ) {}
 
     public function cwd(): string
@@ -30,6 +31,11 @@ final readonly class RunRequest
 
     public function withCancellation(\Closure $isCancelled): self
     {
-        return new self($this->mode, $this->sessionId, $this->prompt, $this->session, $this->run, $isCancelled);
+        return new self($this->mode, $this->sessionId, $this->prompt, $this->session, $this->run, $isCancelled, $this->steering);
+    }
+
+    public function withSteering(SteeringChannel $steering): self
+    {
+        return new self($this->mode, $this->sessionId, $this->prompt, $this->session, $this->run, $this->isCancelled, $steering);
     }
 }

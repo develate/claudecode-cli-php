@@ -12,6 +12,7 @@ use Develate\ClaudecodeCli\Event\UnknownEvent;
 use Develate\ClaudecodeCli\Exception\InvalidStreamJson;
 use Develate\ClaudecodeCli\Message\AssistantMessage;
 use Develate\ClaudecodeCli\Message\UnknownMessage;
+use Develate\ClaudecodeCli\Message\UserMessage;
 use Develate\ClaudecodeCli\Event\StreamEvent;
 use Develate\ClaudecodeCli\Event\ThinkingDelta;
 use Develate\ClaudecodeCli\Parser\StreamJsonParser;
@@ -71,6 +72,18 @@ final class StreamJsonParserTest extends TestCase
         self::assertInstanceOf(ToolResult::class, $items[1]);
         self::assertSame('ok', $items[1]->output());
         self::assertSame(0, $items[1]->exitCode());
+    }
+
+    public function testRecognisesAReplayedUserMessageByItsUuid(): void
+    {
+        $message = (new StreamJsonParser())->parseLine(
+            '{"type":"user","message":{"role":"user","content":"Use PHP 8.4"},"uuid":"11111111-2222-4333-8444-555555555555","isReplay":true}',
+        )[0];
+
+        self::assertInstanceOf(UserMessage::class, $message);
+        self::assertTrue($message->isReplay);
+        self::assertSame('11111111-2222-4333-8444-555555555555', $message->uuid);
+        self::assertSame(['Use PHP 8.4'], $message->content);
     }
 
     public function testKeepsUnknownMessagesEventsAndBlocks(): void
